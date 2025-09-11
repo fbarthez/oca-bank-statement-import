@@ -51,8 +51,12 @@ class AccountStatementImportSheetParser(models.TransientModel):
                 str(value).strip() for value in csv_or_xlsx[1].row_values(header_line)
             ]
         else:
-            [next(csv_or_xlsx) for _i in range(header_line)]
-            header = [value.strip() for value in next(csv_or_xlsx)]
+            # csv_or_xlsx is a list (CSV rows). Guard against empty/short files.
+            try:
+                row = csv_or_xlsx[header_line]
+            except (TypeError, IndexError):
+                return []
+            header = [str(value).strip() for value in row]
         if mapping.offset_column:
             header = header[mapping.offset_column :]
         return header
@@ -176,7 +180,8 @@ class AccountStatementImportSheetParser(models.TransientModel):
                         _("No valid encoding was found for the attached file")
                     ) from None
                 decoded_file = data_file.decode(detected_encoding)
-            csv_or_xlsx = reader(StringIO(decoded_file), **csv_options)
+            # Build a list to respect multiline CSV rows and allow re-iteration
+            csv_or_xlsx = list(reader(StringIO(decoded_file), **csv_options))
         header = self.parse_header(csv_or_xlsx, mapping)
 
         # NOTE no seria necesario debit_column y credit_column ya que tenemos los
@@ -206,36 +211,34 @@ class AccountStatementImportSheetParser(models.TransientModel):
     def _parse_rows(self, mapping, currency_code, data, columns):  # noqa: C901
         csv_or_xlsx, data_file = data
 
-        # Get the numbers of rows of the file
+        # Determine total logical rows
         if isinstance(csv_or_xlsx, tuple):
-            numrows = csv_or_xlsx[1].nrows
+            sheet = csv_or_xlsx[1]
+            numrows = sheet.nrows
         else:
-            numrows = len(str(data_file.strip()).split("\\n"))
+            # CSV case: csv_or_xlsx is a list of parsed rows
+            numrows = len(csv_or_xlsx)
 
         label_line = mapping.header_lines_skip_count
-        footer_line = numrows - mapping.footer_lines_skip_count
-
-        if isinstance(csv_or_xlsx, tuple):
-            rows = range(label_line, footer_line)
-        else:
-            rows = csv_or_xlsx
+        footer_line = max(label_line, numrows - mapping.footer_lines_skip_count)
 
         lines = []
-        for index, row in enumerate(rows, label_line):
+        # Iterate by explicit row index to uniformly handle XLSX and CSV
+        for row_idx in range(label_line, footer_line):
             if isinstance(csv_or_xlsx, tuple):
                 book = csv_or_xlsx[0]
                 sheet = csv_or_xlsx[1]
                 values = []
-                for col_index in range(mapping.offset_column, sheet.row_len(row)):
-                    cell_type = sheet.cell_type(row, col_index)
-                    cell_value = sheet.cell_value(row, col_index)
+                for col_index in range(mapping.offset_column, sheet.row_len(row_idx)):
+                    cell_type = sheet.cell_type(row_idx, col_index)
+                    cell_value = sheet.cell_value(row_idx, col_index)
                     if cell_type == xlrd.XL_CELL_DATE:
                         cell_value = xldate_as_datetime(cell_value, book.datemode)
                     values.append(cell_value)
             else:
-                if index >= footer_line:
-                    continue
-                values = list(row)
+                # CSV row values already parsed
+                values = list(csv_or_xlsx[row_idx])
+
             if mapping.skip_empty_lines and not any(values):
                 continue
 
