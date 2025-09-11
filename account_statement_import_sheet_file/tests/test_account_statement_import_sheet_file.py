@@ -525,6 +525,57 @@ class TestAccountStatementImportSheetFile(common.TransactionCase):
         self.assertEqual(line1.amount, 50)
         self.assertEqual(line4.amount, -1300)
 
+    def test_metadata_multiline_label_csv(self):
+        journal = self.AccountJournal.create(
+            {
+                "name": "Bank",
+                "type": "bank",
+                "code": "BANK",
+                "currency_id": self.currency_usd.id,
+                "suspense_account_id": self.suspense_account.id,
+            }
+        )
+        statement_map = self.sample_statement_map.copy(
+            {
+                "footer_lines_skip_count": 1,
+                "header_lines_skip_count": 5,
+                "amount_column": None,
+                "partner_name_column": None,
+                "bank_account_column": None,
+                "float_thousands_sep": "none",
+                "float_decimal_sep": "comma",
+                "timestamp_format": "%m/%d/%y",
+                "original_currency_column": None,
+                "original_amount_column": None,
+                "amount_type": "distinct_credit_debit",
+                "amount_debit_column": "Debit",
+                "amount_credit_column": "Credit",
+            }
+        )
+        data = self._data_file("fixtures/meta_data_multiline_label.csv", "utf-8")
+        wizard = self.AccountStatementImport.with_context(journal_id=journal.id).create(
+            {
+                "statement_filename": "fixtures/meta_data_multiline_label.csv",
+                "statement_file": data,
+                "sheet_mapping_id": statement_map.id,
+            }
+        )
+        wizard.with_context(
+            journal_id=journal.id,
+            account_bank_statement_import_txt_xlsx_test=True,
+        ).import_file_button()
+        statement = self.AccountBankStatement.search([("journal_id", "=", journal.id)])
+        self.assertEqual(len(statement), 1)
+        self.assertEqual(len(statement.line_ids), 4)
+        # filter with contains, not equal
+        line1 = statement.line_ids.filtered(lambda x: "LABEL 1" in x.payment_ref)
+        line4 = statement.line_ids.filtered(lambda x: "LABEL 4" in x.payment_ref)
+        self.assertEqual(line1.amount, 50)
+        self.assertEqual(line4.amount, -1300)
+        # assert multiline label is correctly imported
+        self.assertIn("LABEL 1 Line 1\nLABEL 1 Line 2", line1.payment_ref)
+        self.assertIn("LABEL 4 Line 1\nLABEL 4 Line 2\nLABEL 4 Line 3", line4.payment_ref)
+
     def test_amount_inverse_sign(self):
         self.sample_statement_map.amount_inverse_sign = True
         journal = self.AccountJournal.create(
